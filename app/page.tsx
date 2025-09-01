@@ -2,14 +2,16 @@
 
 import { useState, useEffect, useRef } from 'react';
 import { ProjectContext, BMCData, AIAnalysis, ProjectData } from '@/types/bmc';
-import { GroqAnalyzer } from '@/lib/groq';
-import { PDFExporter } from '@/lib/pdf-export';
+import { LLMManager, LLMProvider, ProviderStatus } from '@/lib/llm';
+import { ReactPDFExporter } from '@/lib/pdf-export-react';
 import { DashboardHome } from '@/components/dashboard-home';
 import { NewProjectDialog } from '@/components/new-project-dialog';
+import { ImportDialog } from '@/components/import-dialog';
 import { BMCCanvas } from '@/components/bmc-canvas';
 import { AIAssistantPanel } from '@/components/ai-assistant-panel';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
+import { toast } from 'sonner';
 import { 
   Menu, 
   Settings, 
@@ -27,7 +29,9 @@ import {
   ChevronRight,
   Check,
   Clock,
-  Download
+  Download,
+  Import,
+  TrendingUp
 } from 'lucide-react';
 
 type ViewMode = 'home' | 'project';
@@ -41,6 +45,7 @@ const calculateProgress = (bmcData: BMCData): number => {
 export default function Home() {
   const [viewMode, setViewMode] = useState<ViewMode>('home');
   const [showNewProjectDialog, setShowNewProjectDialog] = useState(false);
+  const [showImportDialog, setShowImportDialog] = useState(false);
   const [currentProject, setCurrentProject] = useState<ProjectData | null>(null);
   const [bmcData, setBmcData] = useState<BMCData>({
     keyPartners: '',
@@ -54,10 +59,13 @@ export default function Home() {
     revenueStreams: ''
   });
   const [analyses, setAnalyses] = useState<Record<string, AIAnalysis>>({});
-  const [groqAnalyzer, setGroqAnalyzer] = useState<GroqAnalyzer | null>(null);
+  const [llmManager, setLlmManager] = useState<LLMManager | null>(null);
+  const [currentProvider, setCurrentProvider] = useState<LLMProvider>('groq');
+  const [providersStatus, setProvidersStatus] = useState<ProviderStatus[]>([]);
+  const [isLoadingProviders, setIsLoadingProviders] = useState(true);
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [showAIPanel, setShowAIPanel] = useState(false);
-  const [activeSection, setActiveSection] = useState<string>('');
+  const [activeSection, setActiveSection] = useState<keyof BMCData | ''>('');
   const [isEditingTitle, setIsEditingTitle] = useState(false);
   const [tempTitle, setTempTitle] = useState('');
   const [showProjectMenu, setShowProjectMenu] = useState<string | null>(null);
@@ -67,6 +75,8 @@ export default function Home() {
   const [saveStatus, setSaveStatus] = useState<'saved' | 'saving' | 'unsaved'>('saved');
   const [isExporting, setIsExporting] = useState(false);
   const [isInitialized, setIsInitialized] = useState(false);
+  const [currentModels, setCurrentModels] = useState<Partial<Record<LLMProvider, string>>>({});
+  const [menuPosition, setMenuPosition] = useState<{top: number, left: number} | null>(null);
   const menuRef = useRef<HTMLDivElement>(null);
 
   // Projects state with localStorage persistence
@@ -171,21 +181,52 @@ export default function Home() {
     }
   }, [recentProjects, isInitialized]);
 
-  // Initialize Groq analyzer
+  // Initialize LLM Manager with all providers
   useEffect(() => {
-    try {
-      const analyzer = new GroqAnalyzer();
-      setGroqAnalyzer(analyzer);
-      
-      // Test connection après initialisation
-      analyzer.testConnection().then(isConnected => {
-        if (!isConnected) {
-          console.warn('Groq API connection test failed - check your API key');
-        }
-      });
-    } catch (error) {
-      console.error('Failed to initialize Groq analyzer:', error);
-    }
+    const initializeLLM = async () => {
+      try {
+        setIsLoadingProviders(true);
+        console.log('🚀 Initializing LLM providers...');
+        
+        // Test direct des variables d'environnement
+        console.log('🔍 Environment check:', {
+          groqKey: process.env.NEXT_PUBLIC_GROQ_API_KEY ? 'Found' : 'Missing',
+          geminiKey: process.env.NEXT_PUBLIC_GEMINI_API_KEY ? 'Found' : 'Missing'
+        });
+        
+        const manager = new LLMManager();
+        
+        console.log('🔄 Initializing real providers with your API keys...');
+        const statuses = await manager.initializeAllProviders();
+        
+        setLlmManager(manager);
+        setProvidersStatus(statuses);
+        setCurrentProvider(manager.getCurrentProvider());
+        
+        // Initialiser les modèles par défaut
+        const defaultModels: Partial<Record<LLMProvider, string>> = {};
+        statuses.forEach(status => {
+          if (status.available) {
+            const availableModels = manager.getAvailableModels(status.provider);
+            if (availableModels.length > 0) {
+              defaultModels[status.provider] = availableModels[0];
+            }
+          }
+        });
+        setCurrentModels(defaultModels);
+        
+        console.log('✅ LLM Manager initialized:', statuses);
+        console.log('📊 Current provider:', manager.getCurrentProvider());
+        console.log('🎯 Default models:', defaultModels);
+        console.log('📋 Providers status:', statuses.map(s => `${s.provider}: ${s.available ? '✅' : '❌'} ${s.error || ''}`));
+      } catch (error) {
+        console.error('❌ Failed to initialize LLM Manager:', error);
+      } finally {
+        setIsLoadingProviders(false);
+      }
+    };
+    
+    initializeLLM();
   }, []);
 
   // Close menu when clicking outside
@@ -193,17 +234,92 @@ export default function Home() {
     const handleClickOutside = (event: MouseEvent) => {
       if (menuRef.current && !menuRef.current.contains(event.target as Node)) {
         setShowProjectMenu(null);
+        setMenuPosition(null);
+      }
+    };
+
+    const handleScroll = () => {
+      if (showProjectMenu) {
+        setShowProjectMenu(null);
+        setMenuPosition(null);
+      }
+    };
+
+    const handleResize = () => {
+      if (showProjectMenu) {
+        setShowProjectMenu(null);
+        setMenuPosition(null);
       }
     };
 
     if (showProjectMenu) {
       document.addEventListener('mousedown', handleClickOutside);
-      return () => document.removeEventListener('mousedown', handleClickOutside);
+      window.addEventListener('scroll', handleScroll, true);
+      window.addEventListener('resize', handleResize);
+      return () => {
+        document.removeEventListener('mousedown', handleClickOutside);
+        window.removeEventListener('scroll', handleScroll, true);
+        window.removeEventListener('resize', handleResize);
+      };
     }
   }, [showProjectMenu]);
 
+  // Keyboard shortcuts
+  useEffect(() => {
+    const handleKeyboard = (event: KeyboardEvent) => {
+      // Ctrl+S ou Cmd+S pour sauvegarder
+      if ((event.ctrlKey || event.metaKey) && event.key === 's') {
+        event.preventDefault();
+        if (currentProject && viewMode === 'project') {
+          handleManualSave();
+        }
+      }
+      
+      // Ctrl+E ou Cmd+E pour export rapide
+      if ((event.ctrlKey || event.metaKey) && event.key === 'e') {
+        event.preventDefault();
+        if (currentProject && viewMode === 'project') {
+          handleExportJSON(currentProject);
+          toast.info('⌨️ Export rapide', {
+            description: 'Utilisé Ctrl+E pour exporter en JSON',
+            duration: 2000
+          });
+        }
+      }
+    };
+
+    document.addEventListener('keydown', handleKeyboard);
+    return () => document.removeEventListener('keydown', handleKeyboard);
+  }, [currentProject, viewMode, bmcData]);
+
   const handleNewProject = () => {
     setShowNewProjectDialog(true);
+  };
+
+  // Quick create with templates
+  const handleQuickCreate = (template: 'startup' | 'service') => {
+    const templates = {
+      startup: {
+        titre: 'Startup Innovante',
+        description: 'Nouvelle startup avec une proposition de valeur disruptive',
+        secteur: 'Technologie',
+        stade: 'idee'
+      },
+      service: {
+        titre: 'Service B2B',
+        description: 'Service professionnel pour entreprises',
+        secteur: 'Service B2B',
+        stade: 'prototype'
+      }
+    };
+
+    const context = templates[template] as ProjectContext;
+    handleProjectCreate(context);
+    
+    toast.success(`✨ Template ${template} créé`, {
+      description: `Nouveau BMC créé avec le template ${template}`,
+      duration: 3000
+    });
   };
 
   const handleProjectCreate = (context: ProjectContext) => {
@@ -254,45 +370,18 @@ export default function Home() {
   };
 
   const handleImportProject = () => {
-    const input = document.createElement('input');
-    input.type = 'file';
-    input.accept = '.json';
-    input.onchange = async (event) => {
-      const file = (event.target as HTMLInputElement).files?.[0];
-      if (file) {
-        try {
-          const text = await file.text();
-          const data = JSON.parse(text);
-          
-          // Validate imported data structure
-          if (data.project && data.project.context && data.project.bmcData) {
-            const importedProject: ProjectData = {
-              ...data.project,
-              id: Date.now().toString(), // New ID to avoid conflicts
-              lastModified: 'Just imported',
-              name: data.project.name || data.project.context.titre || 'Projet importé'
-            };
-            
-            // Add to projects list
-            setRecentProjects(prev => [importedProject, ...prev]);
-            
-            // Open the imported project
-            setCurrentProject(importedProject);
-            setBmcData(importedProject.bmcData);
-            setAnalyses({});
-            setViewMode('project');
-            
-            alert(`Projet "${importedProject.name}" importé avec succès !`);
-          } else {
-            throw new Error('Format de fichier invalide');
-          }
-        } catch (error) {
-          console.error('Import error:', error);
-          alert('Erreur lors de l\'import : Vérifiez que le fichier est un JSON valide exporté depuis cette application.');
-        }
-      }
-    };
-    input.click();
+    setShowImportDialog(true);
+  };
+
+  const handleImportConfirm = (importedProject: ProjectData) => {
+    // Add to projects list
+    setRecentProjects(prev => [importedProject, ...prev]);
+    
+    // Open the imported project
+    setCurrentProject(importedProject);
+    setBmcData(importedProject.bmcData);
+    setAnalyses({});
+    setViewMode('project');
   };
 
   const handleTitleEdit = () => {
@@ -363,23 +452,33 @@ export default function Home() {
     document.body.removeChild(a);
     URL.revokeObjectURL(url);
     setShowProjectMenu(null);
+    
+    toast.success('📄 Export JSON réussi', {
+      description: `Le fichier ${project.name}_BMC.json a été téléchargé`
+    });
   };
 
-  const handleExportPDF = async (project: ProjectData, type: 'canvas' | 'text' = 'canvas') => {
+  const handleExportPDF = async (project: ProjectData) => {
     if (isExporting) return;
     
     setIsExporting(true);
     try {
-      const exporter = new PDFExporter();
+      const exporter = new ReactPDFExporter();
       
-      if (type === 'canvas') {
-        await exporter.exportBMCCanvas(project);
-      } else {
-        await exporter.exportTextVersion(project);
-      }
+      // The simplified exporter handles both canvas and fallback automatically
+      await exporter.exportBMCCanvas(project);
+      toast.success('📑 Export PDF réussi', {
+        description: `Le fichier PDF de ${project.name} a été téléchargé`
+      });
     } catch (error) {
       console.error('PDF export error:', error);
-      alert('Erreur lors de l\'export PDF. Vérifiez que le canvas est visible.');
+      const errorMsg = error instanceof Error ? error.message : 'Erreur inconnue';
+      
+      toast.error('❌ Erreur d\'export PDF', {
+        description: errorMsg.includes('Canvas element not found') ? 
+          'Le BMC doit être ouvert et visible pour l\'export' :
+          'Une erreur est survenue pendant l\'export'
+      });
     } finally {
       setIsExporting(false);
       setShowProjectMenu(null);
@@ -458,29 +557,118 @@ export default function Home() {
   };
 
   const handleAnalyzeSection = async (sectionId: keyof BMCData) => {
-    if (!groqAnalyzer || !currentProject) return;
+    if (!llmManager || !currentProject) return;
 
     setIsAnalyzing(true);
     setActiveSection(sectionId);
     setShowAIPanel(true);
 
     try {
-      const analysis = await groqAnalyzer.analyzeSection(
+      console.log(`🤖 Analyzing section ${sectionId} with provider: ${currentProvider}`);
+      
+      const analysis = await llmManager.analyzeSection(
         sectionId,
         bmcData[sectionId],
         currentProject.context,
-        bmcData
+        bmcData,
+        {
+          preferredProvider: currentProvider,
+          enableFallback: true
+        }
       );
       
       setAnalyses(prev => ({
         ...prev,
         [sectionId]: analysis
       }));
+      
+      console.log(`✅ Analysis completed for ${sectionId}`);
     } catch (error) {
-      console.error('Analysis error:', error);
+      console.error('❌ Analysis error:', error);
+      // En cas d'erreur, on ne garde pas d'analyse corrompue
+      setAnalyses(prev => {
+        const newAnalyses = { ...prev };
+        delete newAnalyses[sectionId];
+        return newAnalyses;
+      });
     } finally {
       setIsAnalyzing(false);
     }
+  };
+
+  // Handle provider changes
+  const handleProviderChange = (provider: LLMProvider) => {
+    if (!llmManager) return;
+    
+    const success = llmManager.switchProvider(provider);
+    if (success) {
+      setCurrentProvider(provider);
+      console.log(`🔄 Switched to provider: ${provider}`);
+    }
+  };
+
+  const handleModelChange = (provider: LLMProvider, model: string) => {
+    if (!llmManager) return;
+    
+    console.log(`📝 Model change requested: ${provider} -> ${model}`);
+    
+    // Mettre à jour le state local
+    setCurrentModels(prev => ({
+      ...prev,
+      [provider]: model
+    }));
+    
+    // Pour Ollama, reconfigurer le provider avec le nouveau modèle
+    if (provider === 'ollama') {
+      const updateModel = async () => {
+        const success = await llmManager.updateProviderModel(provider, model);
+        
+        if (success) {
+          console.log(`✅ Ollama model updated to: ${model}`);
+        } else {
+          console.warn(`⚠️ Failed to update Ollama model to: ${model}`);
+        }
+      };
+      
+      updateModel();
+    }
+  };
+
+  // Manual save function
+  const handleManualSave = () => {
+    if (!currentProject) return;
+    
+    setSaveStatus('saving');
+    
+    // Force save to localStorage
+    const updatedProject = {
+      ...currentProject,
+      bmcData,
+      lastModified: new Date().toLocaleString('fr-FR')
+    };
+    
+    setCurrentProject(updatedProject);
+    setRecentProjects(prev => 
+      prev.map(p => p.id === currentProject.id ? updatedProject : p)
+    );
+    
+    // Show completion
+    setTimeout(() => {
+      setSaveStatus('saved');
+      toast.success('💾 Projet sauvegardé', {
+        description: 'Vos modifications ont été sauvegardées avec succès'
+      });
+    }, 500);
+  };
+
+  // Handle section click from AI panel - réouvre l'analyse existante
+  const handleSectionClick = (sectionId: string) => {
+    // Cette fonction va changer la section active dans le panel AI
+    // Le panel reste ouvert pour une meilleure expérience utilisateur
+    setActiveSection(sectionId as keyof BMCData);
+    
+    // Le panel AI reste ouvert et affiche maintenant l'analyse de la section sélectionnée
+    // Cela permet à l'utilisateur de naviguer facilement entre les différentes analyses
   };
 
   // Show home dashboard by default
@@ -493,18 +681,29 @@ export default function Home() {
           onOpenProject={handleOpenProject}
           onImportProject={handleImportProject}
           onResetDemo={resetToDefaultProjects}
+          currentProvider={currentProvider}
+          providersStatus={providersStatus}
+          onProviderChange={handleProviderChange}
+          onModelChange={handleModelChange}
+          currentModels={currentModels}
+          isLoadingProviders={isLoadingProviders}
         />
         <NewProjectDialog
           isOpen={showNewProjectDialog}
           onClose={() => setShowNewProjectDialog(false)}
           onProjectCreate={handleProjectCreate}
         />
+        <ImportDialog
+          isOpen={showImportDialog}
+          onClose={() => setShowImportDialog(false)}
+          onImport={handleImportConfirm}
+        />
       </>
     );
   }
 
-  // Show error if no Groq analyzer
-  if (!groqAnalyzer) {
+  // Show error if no LLM manager
+  if (!llmManager) {
     return (
       <div className="min-h-screen bg-gray-50 flex items-center justify-center p-4">
         <div className="bg-white rounded-lg shadow-lg p-6 w-full max-w-md">
@@ -513,10 +712,12 @@ export default function Home() {
             <h2 className="text-lg font-semibold">Erreur Configuration</h2>
           </div>
           <p className="text-sm text-gray-600 mb-4">
-            La clé API Groq n&apos;est pas configurée. Veuillez ajouter votre clé dans le fichier .env.local :
+            Aucun provider LLM n&apos;est configuré. Veuillez ajouter au moins une clé API dans le fichier .env.local :
           </p>
           <code className="block bg-gray-100 p-2 rounded text-sm mb-4">
-            NEXT_PUBLIC_GROQ_API_KEY=your_key_here
+            NEXT_PUBLIC_GROQ_API_KEY=your_groq_key<br/>
+            NEXT_PUBLIC_GEMINI_API_KEY=your_gemini_key<br/>
+            # ou utilisez Ollama localement
           </code>
           <Button onClick={handleBackToHome} className="w-full">
             Retour à l&apos;accueil
@@ -650,6 +851,8 @@ export default function Home() {
                 size="sm" 
                 className={`flex-1 ${saveStatus === 'saved' ? 'bg-green-600 hover:bg-green-700' : saveStatus === 'saving' ? 'bg-blue-600' : ''}`}
                 disabled={saveStatus === 'saving'}
+                onClick={handleManualSave}
+                title="Sauvegarder (Ctrl+S)"
               >
                 {saveStatus === 'saving' ? (
                   <Clock className="h-3 w-3 mr-1 animate-pulse" />
@@ -662,19 +865,53 @@ export default function Home() {
                   {saveStatus === 'saving' ? 'Saving...' : saveStatus === 'saved' ? 'Saved' : 'Save'}
                 </span>
               </Button>
-              <Button 
-                size="sm" 
-                variant="outline"
-                onClick={() => currentProject && handleExportPDF(currentProject, 'canvas')}
-                disabled={isExporting || !currentProject}
-                title="Export PDF"
-              >
-                {isExporting ? (
-                  <Clock className="h-3 w-3 animate-pulse" />
-                ) : (
-                  <Download className="h-3 w-3" />
+              {/* Export Dropdown Menu */}
+              <div className="relative" ref={showProjectMenu === 'export' ? menuRef : undefined}>
+                <Button 
+                  size="sm" 
+                  variant="outline"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setShowProjectMenu(showProjectMenu === 'export' ? null : 'export');
+                  }}
+                  disabled={isExporting || !currentProject}
+                  title="Options d'export"
+                >
+                  {isExporting ? (
+                    <Clock className="h-3 w-3 animate-pulse" />
+                  ) : (
+                    <Download className="h-3 w-3" />
+                  )}
+                </Button>
+                
+                {showProjectMenu === 'export' && currentProject && (
+                  <div className="absolute right-0 top-8 z-50 bg-white border border-gray-200 rounded-lg shadow-lg py-1 min-w-[160px] max-w-[200px]">
+                    <button
+                      className="w-full px-3 py-1.5 text-left text-sm hover:bg-gray-50 flex items-center gap-2"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        handleExportJSON(currentProject);
+                        setShowProjectMenu(null);
+                      }}
+                    >
+                      <FileText className="h-3 w-3" />
+                      Export JSON
+                    </button>
+                    <button
+                      className="w-full px-3 py-1.5 text-left text-sm hover:bg-gray-50 flex items-center gap-2"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        handleExportPDF(currentProject);
+                        setShowProjectMenu(null);
+                      }}
+                      disabled={isExporting}
+                    >
+                      <Download className="h-3 w-3" />
+                      {isExporting ? 'Export en cours...' : 'Export PDF'}
+                    </button>
+                  </div>
                 )}
-              </Button>
+              </div>
             </div>
           )}
         </div>
@@ -708,20 +945,74 @@ export default function Home() {
         )}
 
         {/* Recent Projects */}
-        <div className="p-4 border-b border-gray-200 flex-1 overflow-hidden">
+        <div className="p-4 border-b border-gray-200 flex-1 overflow-hidden relative">
           {!isSidebarCollapsed ? (
             <>
               <div className="flex items-center justify-between mb-3">
                 <span className="text-sm font-medium">RECENT PROJECTS</span>
-                <Button 
-                  size="sm" 
-                  variant="ghost" 
-                  className="h-6 w-6 p-0"
-                  onClick={handleNewProject}
-                  title="Nouveau projet"
-                >
-                  <Plus className="h-3 w-3" />
-                </Button>
+                <div className="relative" ref={showProjectMenu === 'new' ? menuRef : undefined}>
+                  <Button 
+                    size="sm" 
+                    variant="ghost" 
+                    className="h-6 w-6 p-0"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      setShowProjectMenu(showProjectMenu === 'new' ? null : 'new');
+                    }}
+                    title="Créer un nouveau projet"
+                  >
+                    <Plus className="h-3 w-3" />
+                  </Button>
+                  
+                  {showProjectMenu === 'new' && (
+                    <div className="absolute right-0 top-8 z-50 bg-white border border-gray-200 rounded-lg shadow-lg py-1 min-w-[140px] max-w-[180px]">
+                      <button
+                        className="w-full px-3 py-1.5 text-left text-sm hover:bg-gray-50 flex items-center gap-2"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          handleNewProject();
+                          setShowProjectMenu(null);
+                        }}
+                      >
+                        <Plus className="h-3 w-3" />
+                        Nouveau BMC
+                      </button>
+                      <button
+                        className="w-full px-3 py-1.5 text-left text-sm hover:bg-gray-50 flex items-center gap-2"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          handleImportProject();
+                          setShowProjectMenu(null);
+                        }}
+                      >
+                        <Import className="h-3 w-3" />
+                        Importer BMC
+                      </button>
+                      <button
+                        className="w-full px-3 py-1.5 text-left text-sm hover:bg-gray-50 flex items-center gap-2"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          handleQuickCreate('startup');
+                          setShowProjectMenu(null);
+                        }}
+                      >
+                        <TrendingUp className="h-3 w-3" />
+                        Template Startup
+                      </button>
+                      <button
+                        className="w-full px-3 py-1.5 text-left text-sm hover:bg-gray-50 flex items-center gap-2"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          handleQuickCreate('service');
+                          setShowProjectMenu(null);
+                        }}
+                      >
+                        <Users className="h-3 w-3" />
+                        Template Service
+                      </button>
+                    </div>
+                  )}
+                </div>
               </div>
             </>
           ) : (
@@ -737,16 +1028,32 @@ export default function Home() {
               </Button>
             </div>
           )}
-          <div className="space-y-2 overflow-y-auto flex-1">
-            {recentProjects.slice(0, 4).map((project, index) => (
-              <div key={index} className="group flex items-center gap-2 p-2 rounded hover:bg-gray-50">
-                {!isSidebarCollapsed ? (
-                  <>
-                    <FileText className="h-4 w-4 text-blue-600" />
-                    <div 
-                      className="flex-1 min-w-0 cursor-pointer"
-                      onClick={() => handleOpenProject(project)}
-                    >
+          <div className="space-y-2 overflow-y-auto overflow-x-hidden flex-1">
+            {recentProjects.slice(0, 4).map((project, index) => {
+              const isCurrentProject = currentProject?.id === project.id;
+              return (
+                <div 
+                  key={index} 
+                  className={`group flex items-center gap-2 p-2 rounded transition-all duration-200 ${
+                    isCurrentProject 
+                      ? 'bg-blue-50 border-l-3 border-blue-500 shadow-sm' 
+                      : 'hover:bg-gray-50'
+                  }`}
+                >
+                  {!isSidebarCollapsed ? (
+                    <>
+                      <div className="relative">
+                        <FileText className={`h-4 w-4 transition-colors duration-200 ${
+                          isCurrentProject ? 'text-blue-600' : 'text-gray-500'
+                        }`} />
+                        {isCurrentProject && (
+                          <div className="absolute -top-1 -right-1 w-2 h-2 bg-blue-500 rounded-full animate-pulse"></div>
+                        )}
+                      </div>
+                      <div 
+                        className="flex-1 min-w-0 cursor-pointer"
+                        onClick={() => handleOpenProject(project)}
+                      >
                       {renamingProject === project.id ? (
                         <div className="flex gap-1">
                           <input
@@ -775,8 +1082,21 @@ export default function Home() {
                         </div>
                       ) : (
                         <>
-                          <div className="text-sm font-medium truncate">{project.name}</div>
-                          <div className="text-xs text-gray-500">{project.lastModified}</div>
+                          <div className={`text-sm font-medium truncate transition-colors duration-200 ${
+                            isCurrentProject ? 'text-blue-900' : 'text-gray-900'
+                          }`}>
+                            {project.name}
+                            {isCurrentProject && (
+                              <span className="ml-2 text-xs bg-blue-100 text-blue-700 px-2 py-0.5 rounded-full font-medium">
+                                ACTUEL
+                              </span>
+                            )}
+                          </div>
+                          <div className={`text-xs transition-colors duration-200 ${
+                            isCurrentProject ? 'text-blue-600' : 'text-gray-500'
+                          }`}>
+                            {project.lastModified}
+                          </div>
                         </>
                       )}
                     </div>
@@ -785,9 +1105,38 @@ export default function Home() {
                         size="sm"
                         variant="ghost"
                         className="h-6 w-6 p-0 opacity-0 group-hover:opacity-100 hover:opacity-100"
+                        data-project-menu={project.id}
                         onClick={(e) => {
                           e.stopPropagation();
-                          setShowProjectMenu(showProjectMenu === project.id ? null : project.id);
+                          if (showProjectMenu === project.id) {
+                            setShowProjectMenu(null);
+                            setMenuPosition(null);
+                          } else {
+                            const rect = e.currentTarget.getBoundingClientRect();
+                            const popupWidth = 192; // w-48 = 12rem = 192px
+                            const popupHeight = 300; // estimation de la hauteur du popup
+                            
+                            let left = rect.right + 8;
+                            let top = rect.top;
+                            
+                            // S'assurer que le popup ne sort pas de l'écran à droite
+                            if (left + popupWidth > window.innerWidth) {
+                              left = rect.left - popupWidth - 8;
+                            }
+                            
+                            // S'assurer que le popup ne sort pas de l'écran en bas
+                            if (top + popupHeight > window.innerHeight) {
+                              top = window.innerHeight - popupHeight - 8;
+                            }
+                            
+                            // S'assurer que le popup ne sort pas de l'écran en haut
+                            if (top < 8) {
+                              top = 8;
+                            }
+                            
+                            setMenuPosition({ top, left });
+                            setShowProjectMenu(project.id);
+                          }
                         }}
                         title="Options du projet"
                       >
@@ -795,9 +1144,13 @@ export default function Home() {
                       </Button>
                       
                       {showProjectMenu === project.id && (
-                        <div className="absolute right-0 top-8 z-50 bg-white border border-gray-200 rounded-lg shadow-lg py-1 min-w-[140px]">
+                        <div className="fixed z-50 w-48 bg-white border border-gray-200/60 rounded-xl shadow-2xl py-2 animate-in fade-in-0 zoom-in-95 duration-100 backdrop-blur-sm" 
+                             style={{
+                               top: `${menuPosition?.top || 0}px`,
+                               left: `${menuPosition?.left || 0}px`
+                             }}>
                           <button
-                            className="w-full px-3 py-1.5 text-left text-sm hover:bg-gray-50 flex items-center gap-2"
+                            className="w-full px-4 py-3 text-left text-sm hover:bg-gray-50/80 flex items-center gap-3 transition-all duration-150 border-none bg-transparent text-gray-700 hover:text-gray-900 group"
                             onClick={(e) => {
                               e.stopPropagation();
                               setRenameValue(project.name);
@@ -805,58 +1158,53 @@ export default function Home() {
                               setShowProjectMenu(null);
                             }}
                           >
-                            <Edit className="h-3 w-3" />
-                            Renommer
+                            <Edit className="h-4 w-4 text-gray-500 group-hover:text-gray-700 transition-colors" />
+                            <span className="font-medium">Renommer</span>
                           </button>
                           <button
-                            className="w-full px-3 py-1.5 text-left text-sm hover:bg-gray-50 flex items-center gap-2"
+                            className="w-full px-4 py-3 text-left text-sm hover:bg-gray-50/80 flex items-center gap-3 transition-all duration-150 border-none bg-transparent text-gray-700 hover:text-gray-900 group"
                             onClick={(e) => {
                               e.stopPropagation();
                               handleDuplicateProject(project);
                             }}
                           >
-                            <FileText className="h-3 w-3" />
-                            Dupliquer
+                            <FileText className="h-4 w-4 text-gray-500 group-hover:text-gray-700 transition-colors" />
+                            <span className="font-medium">Dupliquer</span>
                           </button>
+                          <div className="border-t border-gray-100 my-1"></div>
                           <button
-                            className="w-full px-3 py-1.5 text-left text-sm hover:bg-gray-50 flex items-center gap-2"
+                            className="w-full px-4 py-3 text-left text-sm hover:bg-gray-50/80 flex items-center gap-3 transition-all duration-150 border-none bg-transparent text-gray-700 hover:text-gray-900 group"
                             onClick={(e) => {
                               e.stopPropagation();
                               handleExportJSON(project);
                             }}
                           >
-                            <FileText className="h-3 w-3" />
-                            Export JSON
+                            <FileText className="h-4 w-4 text-gray-500 group-hover:text-gray-700 transition-colors" />
+                            <span className="font-medium">Export JSON</span>
                           </button>
                           <button
-                            className="w-full px-3 py-1.5 text-left text-sm hover:bg-gray-50 flex items-center gap-2"
+                            className="w-full px-4 py-3 text-left text-sm hover:bg-gray-50/80 flex items-center gap-3 transition-all duration-150 border-none bg-transparent text-gray-700 hover:text-gray-900 group"
                             onClick={(e) => {
                               e.stopPropagation();
-                              handleExportPDF(project, 'canvas');
+                              handleExportPDF(project);
                             }}
+                            disabled={isExporting}
                           >
-                            <Download className="h-3 w-3" />
-                            Export PDF Canvas
+                            <Download className="h-4 w-4 text-gray-500 group-hover:text-gray-700 transition-colors" />
+                            <span className="font-medium">
+                              {isExporting ? 'Export en cours...' : 'Export PDF'}
+                            </span>
                           </button>
+                          <div className="border-t border-gray-100 my-1"></div>
                           <button
-                            className="w-full px-3 py-1.5 text-left text-sm hover:bg-gray-50 flex items-center gap-2"
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              handleExportPDF(project, 'text');
-                            }}
-                          >
-                            <Share className="h-3 w-3" />
-                            Export PDF Détails
-                          </button>
-                          <button
-                            className="w-full px-3 py-1.5 text-left text-sm hover:bg-gray-50 text-red-600 flex items-center gap-2"
+                            className="w-full px-4 py-3 text-left text-sm hover:bg-red-50/80 flex items-center gap-3 transition-all duration-150 border-none bg-transparent text-red-600 hover:text-red-700 group"
                             onClick={(e) => {
                               e.stopPropagation();
                               handleDeleteProject(project);
                             }}
                           >
-                            <FileText className="h-3 w-3" />
-                            Supprimer
+                            <X className="h-4 w-4 text-red-500 group-hover:text-red-700 transition-colors" />
+                            <span className="font-medium">Supprimer</span>
                           </button>
                         </div>
                       )}
@@ -872,7 +1220,8 @@ export default function Home() {
                   </div>
                 )}
               </div>
-            ))}
+            );
+            })}
           </div>
         </div>
 
@@ -1029,6 +1378,10 @@ export default function Home() {
               onAnalyzeSection={handleAnalyzeSection}
               analyses={analyses}
               context={currentProject.context}
+              isAnalyzing={isAnalyzing}
+              activeSection={activeSection}
+              currentProvider={currentProvider}
+              onSectionClick={handleSectionClick}
             />
           </div>
 
@@ -1039,6 +1392,7 @@ export default function Home() {
               activeSection={activeSection}
               isVisible={showAIPanel}
               onClose={() => setShowAIPanel(false)}
+              onSectionClick={handleSectionClick}
             />
           )}
         </div>

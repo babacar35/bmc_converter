@@ -20,6 +20,7 @@ interface AIAssistantPanelProps {
   activeSection?: string;
   onClose?: () => void;
   isVisible: boolean;
+  onSectionClick?: (sectionId: string, analysis: AIAnalysis) => void;
 }
 
 const sectionNames = {
@@ -34,7 +35,7 @@ const sectionNames = {
   revenueStreams: 'Flux de Revenus'
 };
 
-export function AIAssistantPanel({ analyses, activeSection, onClose, isVisible }: AIAssistantPanelProps) {
+export function AIAssistantPanel({ analyses, activeSection, onClose, isVisible, onSectionClick }: AIAssistantPanelProps) {
   if (!isVisible) return null;
 
   const analysisEntries = Object.entries(analyses);
@@ -109,8 +110,9 @@ export function AIAssistantPanel({ analyses, activeSection, onClose, isVisible }
           </div>
         )}
 
+
         {/* Market Insights */}
-        <div className="p-4 border-b border-gray-100">
+        <div className="p-4">
           <h3 className="font-semibold mb-3 flex items-center gap-2">
             <TrendingUp className="h-4 w-4" />
             Market Insights
@@ -139,25 +141,6 @@ export function AIAssistantPanel({ analyses, activeSection, onClose, isVisible }
             />
           </div>
         </div>
-
-        {/* All Sections Progress */}
-        {analysisEntries.length > 0 && (
-          <div className="p-4">
-            <h3 className="font-semibold mb-3">Progrès par Section</h3>
-            <div className="space-y-2">
-              {analysisEntries.map(([sectionId, analysis]) => (
-                <SectionProgress
-                  key={sectionId}
-                  name={sectionNames[sectionId as keyof typeof sectionNames]}
-                  score={analysis.score}
-                  errors={analysis.errors.length}
-                  suggestions={analysis.suggestions.length}
-                  isActive={sectionId === activeSection}
-                />
-              ))}
-            </div>
-          </div>
-        )}
       </div>
     </div>
   );
@@ -251,13 +234,15 @@ function SectionProgress({
   score, 
   errors, 
   suggestions, 
-  isActive 
+  isActive,
+  onClick 
 }: { 
   name: string; 
   score: number; 
   errors: number; 
   suggestions: number; 
   isActive: boolean;
+  onClick: () => void;
 }) {
   const getScoreColor = (score: number) => {
     if (score >= 80) return 'bg-green-500';
@@ -266,12 +251,22 @@ function SectionProgress({
   };
 
   return (
-    <div className={`p-2 rounded-lg border ${isActive ? 'border-blue-300 bg-blue-50' : 'border-gray-200'}`}>
+    <div 
+      className={`group p-2 rounded-lg border cursor-pointer transition-all duration-200 hover:shadow-sm ${
+        isActive 
+          ? 'border-blue-300 bg-blue-50 shadow-sm' 
+          : 'border-gray-200 hover:border-blue-200 hover:bg-gray-50'
+      }`}
+      onClick={onClick}
+    >
       <div className="flex items-center justify-between mb-2">
         <span className="text-sm font-medium">{name}</span>
-        <Badge variant="outline" className="text-xs">
-          {score}%
-        </Badge>
+        <div className="flex items-center gap-2">
+          <Badge variant="outline" className="text-xs">
+            {score}%
+          </Badge>
+          <Eye className="h-3 w-3 text-gray-400 opacity-0 group-hover:opacity-100 transition-opacity" />
+        </div>
       </div>
       <div className="w-full bg-gray-200 rounded-full h-1.5 mb-2">
         <div 

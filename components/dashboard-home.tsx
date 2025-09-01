@@ -3,7 +3,10 @@
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
+import { toast } from 'sonner';
 import { ProjectData } from '@/types/bmc';
+import { LLMProvider, ProviderStatus } from '@/lib/llm';
+import { LLMProviderSelector } from '@/components/llm-provider-selector';
 import { 
   Plus, 
   FileText, 
@@ -20,6 +23,13 @@ interface DashboardHomeProps {
   onOpenProject: (project: ProjectData) => void;
   onImportProject: () => void;
   onResetDemo?: () => void;
+  // LLM Provider props
+  currentProvider: LLMProvider;
+  providersStatus: ProviderStatus[];
+  onProviderChange: (provider: LLMProvider) => void;
+  onModelChange?: (provider: LLMProvider, model: string) => void;
+  currentModels?: Partial<Record<LLMProvider, string>>;
+  isLoadingProviders?: boolean;
 }
 
 export function DashboardHome({ 
@@ -27,8 +37,20 @@ export function DashboardHome({
   onNewProject, 
   onOpenProject, 
   onImportProject,
-  onResetDemo
+  onResetDemo,
+  currentProvider,
+  providersStatus,
+  onProviderChange,
+  onModelChange,
+  currentModels = {},
+  isLoadingProviders = false
 }: DashboardHomeProps) {
+  const handleGuideClick = () => {
+    toast("📚 Guide en développement", {
+      description: "La documentation et les tutoriels seront bientôt disponibles !",
+      duration: 4000,
+    });
+  };
   return (
     <div className="p-6 max-w-6xl mx-auto">
       {/* Header */}
@@ -61,7 +83,7 @@ export function DashboardHome({
           </CardContent>
         </Card>
 
-        <Card className="cursor-pointer hover:shadow-md transition-shadow">
+        <Card className="cursor-pointer hover:shadow-md transition-shadow" onClick={handleGuideClick}>
           <CardContent className="p-6 text-center">
             <div className="w-12 h-12 bg-purple-100 rounded-full flex items-center justify-center mx-auto mb-3">
               <BookOpen className="h-6 w-6 text-purple-600" />
@@ -171,6 +193,18 @@ export function DashboardHome({
             <p className="text-sm text-gray-600">Collaborateurs</p>
           </CardContent>
         </Card>
+      </div>
+
+      {/* LLM Provider Configuration */}
+      <div className="mt-8">
+        <LLMProviderSelector
+          currentProvider={currentProvider}
+          providersStatus={providersStatus}
+          onProviderChange={onProviderChange}
+          onModelChange={onModelChange}
+          currentModels={currentModels}
+          isLoadingProviders={isLoadingProviders}
+        />
       </div>
     </div>
   );

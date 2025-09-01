@@ -3,8 +3,10 @@
 import { useState } from "react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { Separator } from "@/components/ui/separator";
 import { BMCData, ProjectContext, AIAnalysis } from "@/types/bmc";
-import { Edit, AlertCircle, Lightbulb, Bot } from "lucide-react";
+import { Edit, AlertCircle, Lightbulb, Bot, Loader2, Eye, Target } from "lucide-react";
+import { AnalysisDialog } from './analysis-dialog';
 
 interface BMCCanvasProps {
   bmcData: BMCData;
@@ -12,6 +14,10 @@ interface BMCCanvasProps {
   onAnalyzeSection: (sectionId: keyof BMCData) => void;
   analyses: Record<string, AIAnalysis>;
   context: ProjectContext;
+  isAnalyzing?: boolean;
+  activeSection?: keyof BMCData | null;
+  currentProvider: string;
+  onSectionClick?: (sectionId: string, analysis: AIAnalysis) => void;
 }
 
 const bmcSections = [
@@ -71,15 +77,34 @@ const bmcSections = [
   },
 ];
 
+const sectionNames = {
+  keyPartners: 'Partenaires Clés',
+  keyActivities: 'Activités Clés',
+  valuePropositions: 'Propositions de Valeur',
+  customerRelationships: 'Relations Clients',
+  customerSegments: 'Segments de Clientèle',
+  keyResources: 'Ressources Clés',
+  channels: 'Canaux',
+  costStructure: 'Structure des Coûts',
+  revenueStreams: 'Flux de Revenus'
+};
+
 export function BMCCanvas({
   bmcData,
   onSectionChange,
   onAnalyzeSection,
   analyses,
+  context,
+  isAnalyzing = false,
+  activeSection = null,
+  currentProvider,
+  onSectionClick
 }: BMCCanvasProps) {
   const [editingSection, setEditingSection] = useState<keyof BMCData | null>(
     null
   );
+  const [showAnalysisDialog, setShowAnalysisDialog] = useState(false);
+  const [dialogSection, setDialogSection] = useState<keyof BMCData | null>(null);
 
   const handleSectionClick = (sectionId: keyof BMCData) => {
     setEditingSection(sectionId);
@@ -99,11 +124,24 @@ export function BMCCanvas({
     setEditingSection(null);
   };
 
+  const handleAnalyzeClick = (sectionId: keyof BMCData) => {
+    setDialogSection(sectionId);
+    setShowAnalysisDialog(true);
+  };
+
+  const handleStartAnalysis = () => {
+    if (dialogSection) {
+      onAnalyzeSection(dialogSection);
+    }
+  };
+
+  const analysisEntries = Object.entries(analyses);
+
   return (
     <div className="w-full h-full bg-white">
       {/* Canvas Grid - Traditional BMC Layout */}
-      <div className="px-6 py-6 bmc-canvas-container">
-        <div className="grid grid-cols-5 gap-4 h-[600px]" style={{gridTemplateRows: 'repeat(3, minmax(0, 1fr))'}}>
+      <div className="px-6 py-6 bmc-canvas-container" data-bmc-canvas="true">
+        <div className="grid grid-cols-5 gap-4 h-[750px]" style={{gridTemplateRows: 'repeat(3, minmax(0, 1fr))'}}>
           {/* Key Partners - Tall left column */}
           <BMCSection
             section={bmcSections[0]}
@@ -116,6 +154,7 @@ export function BMCCanvas({
             onBlur={handleBlur}
             onAnalyze={() => onAnalyzeSection("keyPartners")}
             className="row-span-2"
+            isAnalyzing={isAnalyzing && activeSection === "keyPartners"}
           />
 
           {/* Key Activities - Top center left */}
@@ -129,6 +168,7 @@ export function BMCCanvas({
             onKeyDown={handleKeyDown}
             onBlur={handleBlur}
             onAnalyze={() => onAnalyzeSection("keyActivities")}
+            isAnalyzing={isAnalyzing && activeSection === "keyActivities"}
           />
 
           {/* Value Propositions - Tall center column */}
@@ -143,6 +183,7 @@ export function BMCCanvas({
             onBlur={handleBlur}
             onAnalyze={() => onAnalyzeSection("valuePropositions")}
             className="row-span-2"
+            isAnalyzing={isAnalyzing && activeSection === "valuePropositions"}
           />
 
           {/* Customer Relationships - Top right center */}
@@ -156,6 +197,7 @@ export function BMCCanvas({
             onKeyDown={handleKeyDown}
             onBlur={handleBlur}
             onAnalyze={() => onAnalyzeSection("customerRelationships")}
+            isAnalyzing={isAnalyzing && activeSection === "customerRelationships"}
           />
 
           {/* Customer Segments - Tall right column */}
@@ -170,6 +212,7 @@ export function BMCCanvas({
             onBlur={handleBlur}
             onAnalyze={() => onAnalyzeSection("customerSegments")}
             className="row-span-2"
+            isAnalyzing={isAnalyzing && activeSection === "customerSegments"}
           />
 
           {/* Key Resources - Middle left */}
@@ -184,6 +227,7 @@ export function BMCCanvas({
             onBlur={handleBlur}
             onAnalyze={() => onAnalyzeSection("keyResources")}
             className="col-start-2 row-start-2"
+            isAnalyzing={isAnalyzing && activeSection === "keyResources"}
           />
 
           {/* Channels - Middle right */}
@@ -198,6 +242,7 @@ export function BMCCanvas({
             onBlur={handleBlur}
             onAnalyze={() => onAnalyzeSection("channels")}
             className="col-start-4 row-start-2"
+            isAnalyzing={isAnalyzing && activeSection === "channels"}
           />
 
           {/* Cost Structure - Bottom left (spans 2.5 columns) */}
@@ -212,6 +257,7 @@ export function BMCCanvas({
             onBlur={handleBlur}
             onAnalyze={() => onAnalyzeSection("costStructure")}
             className="col-span-2 row-start-3"
+            isAnalyzing={isAnalyzing && activeSection === "costStructure"}
           />
 
           {/* Revenue Streams - Bottom right (spans 2.5 columns) */}
@@ -226,8 +272,111 @@ export function BMCCanvas({
             onBlur={handleBlur}
             onAnalyze={() => onAnalyzeSection("revenueStreams")}
             className="col-span-3 col-start-3 row-start-3"
+            isAnalyzing={isAnalyzing && activeSection === "revenueStreams"}
           />
         </div>
+      </div>
+
+      {/* Section Progress - Below BMC Canvas */}
+      {analysisEntries.length > 0 && (
+        <>
+          <Separator className="mx-6" />
+          <div className="px-6 py-4 bg-gray-50/50">
+            <div className="mb-3">
+              <h3 className="font-semibold text-lg flex items-center gap-2">
+                <Target className="h-5 w-5 text-blue-600" />
+                Progrès par Section
+              </h3>
+              <p className="text-sm text-gray-600 mt-1">Cliquez sur une section pour revoir son analyse</p>
+            </div>
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
+              {analysisEntries.map(([sectionId, analysis]) => (
+                <SectionProgress
+                  key={sectionId}
+                  name={sectionNames[sectionId as keyof typeof sectionNames]}
+                  score={analysis.score}
+                  errors={analysis.errors.length}
+                  suggestions={analysis.suggestions.length}
+                  isActive={sectionId === activeSection}
+                  onClick={() => onSectionClick?.(sectionId, analysis)}
+                />
+              ))}
+            </div>
+          </div>
+        </>
+      )}
+      
+      {/* Analysis Dialog */}
+      {dialogSection && (
+        <AnalysisDialog
+          isOpen={showAnalysisDialog}
+          onClose={() => setShowAnalysisDialog(false)}
+          isAnalyzing={isAnalyzing && activeSection === dialogSection}
+          analysis={analyses[dialogSection] || null}
+          sectionName={bmcSections.find(s => s.id === dialogSection)?.title || ''}
+          content={bmcData[dialogSection]}
+          provider={currentProvider as any}
+          onStartAnalysis={handleStartAnalysis}
+        />
+      )}
+    </div>
+  );
+}
+
+function SectionProgress({ 
+  name, 
+  score, 
+  errors, 
+  suggestions, 
+  isActive,
+  onClick 
+}: { 
+  name: string; 
+  score: number; 
+  errors: number; 
+  suggestions: number; 
+  isActive: boolean;
+  onClick: () => void;
+}) {
+  const getScoreColor = (score: number) => {
+    if (score >= 80) return 'bg-green-500';
+    if (score >= 60) return 'bg-orange-500';
+    return 'bg-red-500';
+  };
+
+  return (
+    <div 
+      className={`group p-4 rounded-lg border cursor-pointer transition-all duration-200 hover:shadow-md bg-white ${
+        isActive 
+          ? 'border-blue-300 bg-blue-50 shadow-sm ring-2 ring-blue-200' 
+          : 'border-gray-200 hover:border-blue-200 hover:bg-gray-50'
+      }`}
+      onClick={onClick}
+    >
+      <div className="flex items-center justify-between mb-3">
+        <span className="text-sm font-medium text-gray-900">{name}</span>
+        <div className="flex items-center gap-2">
+          <Badge variant="outline" className="text-xs font-semibold">
+            {score}%
+          </Badge>
+          <Eye className="h-4 w-4 text-gray-400 opacity-0 group-hover:opacity-100 transition-opacity" />
+        </div>
+      </div>
+      <div className="w-full bg-gray-200 rounded-full h-2 mb-3">
+        <div 
+          className={`h-2 rounded-full transition-all duration-300 ${getScoreColor(score)}`}
+          style={{ width: `${score}%` }}
+        ></div>
+      </div>
+      <div className="flex justify-between text-xs text-gray-500">
+        <span className="flex items-center gap-1">
+          <AlertCircle className="h-3 w-3" />
+          {errors} erreurs
+        </span>
+        <span className="flex items-center gap-1">
+          <Lightbulb className="h-3 w-3" />
+          {suggestions} suggestions
+        </span>
       </div>
     </div>
   );
@@ -248,7 +397,9 @@ interface BMCSectionProps {
   onKeyDown: (e: React.KeyboardEvent) => void;
   onBlur: () => void;
   onAnalyze: () => void;
+  onAnalyzeClick?: () => void;
   className?: string;
+  isAnalyzing?: boolean;
 }
 
 function BMCSection({
@@ -261,7 +412,9 @@ function BMCSection({
   onKeyDown,
   onBlur,
   onAnalyze,
+  onAnalyzeClick,
   className = "",
+  isAnalyzing = false,
 }: BMCSectionProps) {
   return (
     <div
@@ -269,7 +422,7 @@ function BMCSection({
         ${section.color} 
         ${className} 
         rounded-lg border-2 border-dashed
-        h-full min-h-[160px] p-4 cursor-pointer
+        h-full min-h-[220px] p-4 cursor-pointer
         hover:border-solid hover:shadow-sm transition-all duration-200
         ${isEditing ? "border-blue-400 shadow-md bg-blue-50/30" : ""}
         flex flex-col
@@ -309,7 +462,7 @@ function BMCSection({
             onKeyDown={onKeyDown}
             onBlur={onBlur}
             autoFocus
-            className="w-full flex-1 p-2 text-sm border-0 bg-transparent resize-none focus:outline-none placeholder-gray-400 min-h-[100px]"
+            className="w-full flex-1 p-2 text-sm border-0 bg-transparent resize-none focus:outline-none placeholder-gray-400 min-h-[150px]"
             placeholder={section.placeholder}
           />
         ) : (
@@ -362,12 +515,17 @@ function BMCSection({
                     variant="ghost"
                     onClick={(e) => {
                       e.stopPropagation();
-                      onAnalyze();
+                      onAnalyzeClick ? onAnalyzeClick() : onAnalyze();
                     }}
-                    className="text-xs h-6 px-2 text-purple-600 hover:bg-purple-50"
+                    disabled={isAnalyzing}
+                    className="text-xs h-6 px-2 text-purple-600 hover:bg-purple-50 disabled:opacity-50"
                   >
-                    <Bot className="h-3 w-3 mr-1" />
-                    Analyser
+                    {isAnalyzing ? (
+                      <Loader2 className="h-3 w-3 mr-1 animate-spin" />
+                    ) : (
+                      <Bot className="h-3 w-3 mr-1" />
+                    )}
+                    {isAnalyzing ? 'Analyse...' : 'Analyser'}
                   </Button>
                 )}
               </>
